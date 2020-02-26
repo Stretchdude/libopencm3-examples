@@ -22,6 +22,13 @@
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
+#include <libopencm3/stm32/timer.h>
+#include <libopencm3/cm3/nvic.h>
+
+
+#ifndef ARRAY_LEN
+#define ARRAY_LEN(array) (sizeof((array))/sizeof((array)[0]))
+#endif
 
 static const struct usb_device_descriptor dev = {
 	.bLength = USB_DT_DEVICE_SIZE,
@@ -47,27 +54,27 @@ static const struct usb_device_descriptor dev = {
  */
 static const struct usb_endpoint_descriptor comm_endp[] = {{
 	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x83,
-	.bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT,
-	.wMaxPacketSize = 16,
-	.bInterval = 255,
+		.bDescriptorType = USB_DT_ENDPOINT,
+		.bEndpointAddress = 0x83,
+		.bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT,
+		.wMaxPacketSize = 16,
+		.bInterval = 255,
 }};
 
 static const struct usb_endpoint_descriptor data_endp[] = {{
 	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x01,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
+		.bDescriptorType = USB_DT_ENDPOINT,
+		.bEndpointAddress = 0x01,
+		.bmAttributes = USB_ENDPOINT_ATTR_BULK,
+		.wMaxPacketSize = 64,
+		.bInterval = 1,
 }, {
 	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x82,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
+		.bDescriptorType = USB_DT_ENDPOINT,
+		.bEndpointAddress = 0x82,
+		.bmAttributes = USB_ENDPOINT_ATTR_BULK,
+		.wMaxPacketSize = 64,
+		.bInterval = 1,
 }};
 
 static const struct {
@@ -102,46 +109,46 @@ static const struct {
 		.bDescriptorSubtype = USB_CDC_TYPE_UNION,
 		.bControlInterface = 0,
 		.bSubordinateInterface0 = 1,
-	 },
+	},
 };
 
 static const struct usb_interface_descriptor comm_iface[] = {{
 	.bLength = USB_DT_INTERFACE_SIZE,
-	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 0,
-	.bAlternateSetting = 0,
-	.bNumEndpoints = 1,
-	.bInterfaceClass = USB_CLASS_CDC,
-	.bInterfaceSubClass = USB_CDC_SUBCLASS_ACM,
-	.bInterfaceProtocol = USB_CDC_PROTOCOL_AT,
-	.iInterface = 0,
+		.bDescriptorType = USB_DT_INTERFACE,
+		.bInterfaceNumber = 0,
+		.bAlternateSetting = 0,
+		.bNumEndpoints = 1,
+		.bInterfaceClass = USB_CLASS_CDC,
+		.bInterfaceSubClass = USB_CDC_SUBCLASS_ACM,
+		.bInterfaceProtocol = USB_CDC_PROTOCOL_AT,
+		.iInterface = 0,
 
-	.endpoint = comm_endp,
+		.endpoint = comm_endp,
 
-	.extra = &cdcacm_functional_descriptors,
-	.extralen = sizeof(cdcacm_functional_descriptors),
+		.extra = &cdcacm_functional_descriptors,
+		.extralen = sizeof(cdcacm_functional_descriptors),
 }};
 
 static const struct usb_interface_descriptor data_iface[] = {{
 	.bLength = USB_DT_INTERFACE_SIZE,
-	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 1,
-	.bAlternateSetting = 0,
-	.bNumEndpoints = 2,
-	.bInterfaceClass = USB_CLASS_DATA,
-	.bInterfaceSubClass = 0,
-	.bInterfaceProtocol = 0,
-	.iInterface = 0,
+		.bDescriptorType = USB_DT_INTERFACE,
+		.bInterfaceNumber = 1,
+		.bAlternateSetting = 0,
+		.bNumEndpoints = 2,
+		.bInterfaceClass = USB_CLASS_DATA,
+		.bInterfaceSubClass = 0,
+		.bInterfaceProtocol = 0,
+		.iInterface = 0,
 
-	.endpoint = data_endp,
+		.endpoint = data_endp,
 }};
 
 static const struct usb_interface ifaces[] = {{
 	.num_altsetting = 1,
-	.altsetting = comm_iface,
+		.altsetting = comm_iface,
 }, {
 	.num_altsetting = 1,
-	.altsetting = data_iface,
+		.altsetting = data_iface,
 }};
 
 static const struct usb_config_descriptor config = {
@@ -165,6 +172,8 @@ static const char *usb_strings[] = {
 
 /* Buffer to be used for control requests. */
 uint8_t usbd_control_buffer[128];
+volatile int enable_kitt = 0;
+volatile int led_sel = 0;
 
 static enum usbd_request_return_codes cdcacm_control_request(usbd_device *usbd_dev, struct usb_setup_data *req, uint8_t **buf,
 		uint16_t *len, void (**complete)(usbd_device *usbd_dev, struct usb_setup_data *req))
@@ -174,56 +183,98 @@ static enum usbd_request_return_codes cdcacm_control_request(usbd_device *usbd_d
 	(void)usbd_dev;
 
 	switch (req->bRequest) {
-	case USB_CDC_REQ_SET_CONTROL_LINE_STATE: {
-		/*
-		 * This Linux cdc_acm driver requires this to be implemented
-		 * even though it's optional in the CDC spec, and we don't
-		 * advertise it in the ACM functional descriptor.
-		 */
-		char local_buf[10];
-		struct usb_cdc_notification *notif = (void *)local_buf;
+		case USB_CDC_REQ_SET_CONTROL_LINE_STATE: 
+			{
+				/*
+				 * This Linux cdc_acm driver requires this to be implemented
+				 * even though it's optional in the CDC spec, and we don't
+				 * advertise it in the ACM functional descriptor.
+				 */
+				char local_buf[10];
+				struct usb_cdc_notification *notif = (void *)local_buf;
 
-		/* We echo signals back to host as notification. */
-		notif->bmRequestType = 0xA1;
-		notif->bNotification = USB_CDC_NOTIFY_SERIAL_STATE;
-		notif->wValue = 0;
-		notif->wIndex = 0;
-		notif->wLength = 2;
-		local_buf[8] = req->wValue & 3;
-		local_buf[9] = 0;
-		// usbd_ep_write_packet(0x83, buf, 10);
-		return USBD_REQ_HANDLED;
-		}
-	case USB_CDC_REQ_SET_LINE_CODING:
-		if (*len < sizeof(struct usb_cdc_line_coding))
-			return USBD_REQ_NOTSUPP;
-		return USBD_REQ_HANDLED;
+				/* We echo signals back to host as notification. */
+				notif->bmRequestType = 0xA1;
+				notif->bNotification = USB_CDC_NOTIFY_SERIAL_STATE;
+				notif->wValue = 0;
+				notif->wIndex = 0;
+				notif->wLength = 2;
+				local_buf[8] = req->wValue & 3;
+				local_buf[9] = 0;
+				// usbd_ep_write_packet(0x83, buf, 10);
+				return USBD_REQ_HANDLED;
+			}
+		case USB_CDC_REQ_SET_LINE_CODING:
+			if (*len < sizeof(struct usb_cdc_line_coding))
+				return USBD_REQ_NOTSUPP;
+			return USBD_REQ_HANDLED;
 	}
 	return USBD_REQ_NOTSUPP;
 }
 
-
-static void switch_pin(char buf)
+static int create_answer(char *buf, const char *ans)
 {
-	if (buf == 'R'){
-	gpio_clear(GPIOC, GPIO13);
-		gpio_clear(GPIOB, GPIO12);
-	} else if (buf == 'r') {
-	gpio_set(GPIOC, GPIO13);
-		gpio_set(GPIOB, GPIO12);
-	} else if (buf == 'G'){ 
-	gpio_clear(GPIOC, GPIO13);
-		gpio_clear(GPIOB, GPIO13);
-	} else if (buf == 'g'){ 
-	gpio_set(GPIOC, GPIO13);
-		gpio_set(GPIOB, GPIO13);
-	} else if (buf == 'Y'){
-	gpio_clear(GPIOC, GPIO13);
-		 gpio_clear(GPIOB, GPIO14);
-	} else if (buf == 'y'){
-	gpio_set(GPIOC, GPIO13);
-		gpio_set(GPIOB, GPIO14);
+	char *out = buf;
+	while(*ans){
+		*out = *ans;
+		out++;
+		ans++;
 	}
+	return (out - buf);
+}
+
+static int switch_pin(char *buf, int *len)
+{
+	gpio_clear(GPIOC, GPIO13);
+	gpio_set(GPIOC, GPIO13);
+	switch(buf[0]) {
+		case 'R':
+			gpio_clear(GPIOC, GPIO13);
+			gpio_clear(GPIOB, GPIO12);
+			*len = create_answer(buf, "Ron\n");
+			return 0;	
+		case 'r':
+			gpio_set(GPIOC, GPIO13);
+			gpio_set(GPIOB, GPIO12);
+			*len = create_answer(buf, "Rof\n");
+			return 0;
+		case 'G':
+			gpio_clear(GPIOC, GPIO13);
+			gpio_clear(GPIOB, GPIO13);
+			*len = create_answer(buf, "Gon\n");
+			return 0;
+		case 'g':
+			gpio_set(GPIOC, GPIO13);
+			gpio_set(GPIOB, GPIO13);
+			*len = create_answer(buf, "Gof\n");
+			return 0;	
+		case 'Y': 
+			gpio_clear(GPIOC, GPIO13);
+			gpio_clear(GPIOB, GPIO14);
+			*len = create_answer(buf, "Yon\n");
+			return 0;	
+		case 'y':
+			gpio_set(GPIOC, GPIO13);
+			gpio_set(GPIOB, GPIO14);
+			*len = create_answer(buf, "Yof\n");
+			return 0;
+		case 'K':
+			enable_kitt = 1;
+			*len = create_answer(buf, "KITT\n");
+			return 0;
+		case 'k':
+			enable_kitt = 0;
+			gpio_set(GPIOC, GPIO13);
+			gpio_set(GPIOB, GPIO12);
+			gpio_set(GPIOB, GPIO13);
+			gpio_set(GPIOB, GPIO14);
+
+			*len = create_answer(buf, "Kof\n");
+			return 0;
+		default:
+			return -1;
+	}
+	return -1;
 }
 
 static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
@@ -235,13 +286,13 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 
 	int len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
 
-	switch_pin(buf[0]);
+	switch_pin(buf, &len);
 
 	if (len) {
 		usbd_ep_write_packet(usbd_dev, 0x82, buf, len);
 		buf[len] = 0;
 	}
-	
+
 
 }
 
@@ -255,11 +306,94 @@ static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue)
 	usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
 
 	usbd_register_control_callback(
-				usbd_dev,
-				USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
-				USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
-				cdcacm_control_request);
+			usbd_dev,
+			USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
+			USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
+			cdcacm_control_request);
 }
+static void tim_setup(void)
+{       
+	/* Enable TIM2 clock. */
+	rcc_periph_clock_enable(RCC_TIM2);
+
+	/* Enable TIM2 interrupt. */
+	nvic_enable_irq(NVIC_TIM2_IRQ);
+
+	/* Reset TIM2 peripheral to defaults. */
+	rcc_periph_reset_pulse(RST_TIM2);
+
+	/* Timer global mode:
+	 * - No divider
+	 * - Alignment edge
+	 * - Direction up
+	 * (These are actually default values after reset above, so this call
+	 * is strictly unnecessary, but demos the api for alternative settings)
+	 */
+	timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT,
+			TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+
+	/*
+	 * Please take note that the clock source for STM32 timers
+	 * might not be the raw APB1/APB2 clocks.  In various conditions they
+	 * are doubled.  See the Reference Manual for full details!
+	 * In our case, TIM2 on APB1 is running at double frequency, so this
+	 * sets the prescaler to have the timer run at 5kHz
+	 */
+	timer_set_prescaler(TIM2, ((rcc_apb1_frequency * 2) / 5000));
+
+	/* Disable preload. */
+	timer_disable_preload(TIM2);
+	timer_continuous_mode(TIM2);
+
+	/* count full range, as we'll update compare value continuously */
+	timer_set_period(TIM2, 65535);
+
+	/* Set the initual output compare value for OC1. */
+	//timer_set_oc_value(TIM2, TIM_OC1, frequency_sequence[frequency_sel++]);
+	timer_set_oc_value(TIM2, TIM_OC1, 100);
+
+	/* Counter enable. */
+	timer_enable_counter(TIM2);
+
+	/* Enable Channel 1 compare interrupt to recalculate compare values */
+	timer_enable_irq(TIM2, TIM_DIER_CC1IE);
+}
+
+int leds[] = {GPIO12, GPIO13, GPIO14};
+
+void tim2_isr(void)
+{
+	if (timer_get_flag(TIM2, TIM_SR_CC1IF)) {
+
+		/* Clear compare interrupt flag. */
+		timer_clear_flag(TIM2, TIM_SR_CC1IF);
+
+		
+
+		/*
+		 * Get current timer value to calculate next
+		 * compare register value.
+		 */
+		uint16_t compare_time = timer_get_counter(TIM2);
+
+		/* Calculate and set the next compare value. */
+		//uint16_t frequency = frequency_sequence[frequency_sel++];
+		//uint16_t new_time = compare_time + frequency;
+		if (enable_kitt){
+			gpio_set(GPIOB, leds[led_sel++]);
+			if (led_sel == ARRAY_LEN(leds)) {
+				led_sel = 0;
+			}
+			gpio_clear(GPIOB, leds[led_sel]);
+			/* Toggle LED to indicate compare event. */
+//			gpio_toggle(GPIOC, GPIO13);
+		}
+
+		timer_set_oc_value(TIM2, TIM_OC1, compare_time + (2 * 500));
+
+	}
+}
+
 
 int main(void)
 {
@@ -277,20 +411,29 @@ int main(void)
 	gpio_set(GPIOB, GPIO13);
 	gpio_set(GPIOB, GPIO14);
 	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+			GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO12);
+			GPIO_CNF_OUTPUT_PUSHPULL, GPIO12);
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+			GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO14);
+			GPIO_CNF_OUTPUT_PUSHPULL, GPIO14);
 
-	usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &dev, &config, usb_strings, 3, usbd_control_buffer, sizeof(usbd_control_buffer));
+
+	tim_setup();
+	enable_kitt = 1;
+
+	usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, 
+			&dev, &config, usb_strings, 
+			3, usbd_control_buffer, 
+			sizeof(usbd_control_buffer));
+
 	usbd_register_set_config_callback(usbd_dev, cdcacm_set_config);
 
 	for (i = 0; i < 0x800000; i++)
 		__asm__("nop");
 	gpio_clear(GPIOC, GPIO13);
+	enable_kitt = 0;
 
 	while (1)
 		usbd_poll(usbd_dev);
